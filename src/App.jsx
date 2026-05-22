@@ -264,8 +264,40 @@ export default function App() {
   // ── NAV ──
   const TABS = [
     ["sales","🛒 Venta"],["transfer","🔄 Traslado"],["stock","📦 Inventario"],
-    ["recipes","🍳 Receitas"],["config","⚙ Config"],["history","📋 Historial"],
+    ["recipes","🍳 Receitas"],["summary","📊 Resumo"],["config","⚙ Config"],["history","📋 Historial"],
   ];
+
+  // ── Summary filters ──
+  const today = new Date().toISOString().slice(0,10);
+  const [sumFrom, setSumFrom] = useState(today);
+  const [sumTo,   setSumTo]   = useState(today);
+  const [sumRest, setSumRest] = useState("TODOS");
+
+  const filteredSales = sales.filter(s => {
+    if (s.restaurant.startsWith("🔄")) return false;
+    if (sumRest !== "TODOS" && s.restaurant !== sumRest) return false;
+    if (s.date < sumFrom || s.date > sumTo) return false;
+    return true;
+  });
+
+  // Per-restaurant breakdown
+  const summaryByRestaurant = restaurants.map(r => {
+    const rSales = filteredSales.filter(s => s.restaurant === r);
+    const itemTotals = {};
+    rSales.forEach(s => s.items.forEach(({ item, qty }) => {
+      itemTotals[item] = (itemTotals[item] || 0) + qty;
+    }));
+    const totalUnits = Object.values(itemTotals).reduce((a,b)=>a+b,0);
+    return { name: r, itemTotals, totalUnits, txCount: rSales.length };
+  }).filter(r => sumRest === "TODOS" || r.name === sumRest);
+
+  // Top items across all filtered sales
+  const globalItemTotals = {};
+  filteredSales.forEach(s => s.items.forEach(({ item, qty }) => {
+    globalItemTotals[item] = (globalItemTotals[item] || 0) + qty;
+  }));
+  const topItems = Object.entries(globalItemTotals).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  const totalUnitsAll = Object.values(globalItemTotals).reduce((a,b)=>a+b,0);
 
   return (
     <div style={{ minHeight:"100vh", background:C.bg, fontFamily:"'IBM Plex Mono','Courier New',monospace", color:C.text }}>
@@ -503,6 +535,179 @@ export default function App() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* ══ SUMMARY ══ */}
+        {tab==="summary" && (
+          <div>
+            {/* Print styles injected */}
+            <style>{`
+              @media print {
+                body { background: #fff !important; color: #000 !important; }
+                .no-print { display: none !important; }
+                .print-card { background: #fff !important; border: 1px solid #ccc !important; color: #000 !important; break-inside: avoid; }
+                .print-title { color: #000 !important; }
+                .print-muted { color: #555 !important; }
+                .print-accent { color: #4c1d95 !important; }
+                .print-header { background: #f3f0ff !important; color: #000 !important; border-bottom: 2px solid #7c3aed !important; }
+                .print-row-alt { background: #f9f7ff !important; }
+                .print-tag { background: #ede9fe !important; color: #4c1d95 !important; }
+                .print-low { color: #b91c1c !important; font-weight: bold; }
+                .print-ok  { color: #15803d !important; }
+              }
+            `}</style>
+
+            {/* Controls */}
+            <div className="no-print" style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:20, marginBottom:16 }}>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:12, alignItems:"flex-end" }}>
+                <div>
+                  <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>DE</div>
+                  <input type="date" style={{...inp, width:"auto"}} value={sumFrom} onChange={e=>setSumFrom(e.target.value)} />
+                </div>
+                <div>
+                  <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>ATÉ</div>
+                  <input type="date" style={{...inp, width:"auto"}} value={sumTo} onChange={e=>setSumTo(e.target.value)} />
+                </div>
+                <div>
+                  <div style={{ fontSize:10, color:C.muted, marginBottom:4 }}>RESTAURANTE</div>
+                  <select style={{...inp, width:"auto"}} value={sumRest} onChange={e=>setSumRest(e.target.value)}>
+                    <option value="TODOS">TODOS</option>
+                    {restaurants.map(r=><option key={r}>{r}</option>)}
+                  </select>
+                </div>
+                <button onClick={()=>window.print()} style={btn({ padding:"9px 20px", marginLeft:"auto" })}>
+                  🖨 Imprimir / PDF
+                </button>
+              </div>
+            </div>
+
+            {/* Print header */}
+            <div className="print-header" style={{ background:"linear-gradient(135deg,#1e1b4b,#312e81)", borderRadius:12, padding:"20px 24px", marginBottom:16 }}>
+              <div className="print-title" style={{ fontSize:20, fontWeight:800, color:C.accent, letterSpacing:"0.06em" }}>한식 · RESUMO DE VENTAS</div>
+              <div className="print-muted" style={{ fontSize:11, color:C.muted, marginTop:4 }}>
+                Período: {sumFrom} → {sumTo} &nbsp;·&nbsp; {sumRest === "TODOS" ? "Todos os restaurantes" : sumRest}
+                &nbsp;·&nbsp; Gerado: {new Date().toLocaleString("pt-BR")}
+              </div>
+            </div>
+
+            {filteredSales.length === 0 ? (
+              <div style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:40, textAlign:"center", color:C.dim }}>
+                Nenhuma venda encontrada no período selecionado.
+              </div>
+            ) : (<>
+
+            {/* KPI row */}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12, marginBottom:16 }}>
+              {[
+                ["Total de transações", filteredSales.length, C.accent],
+                ["Unidades vendidas", totalUnitsAll, "#34d399"],
+                ["Itens distintos", Object.keys(globalItemTotals).length, "#60a5fa"],
+                ["Restaurantes ativos", summaryByRestaurant.filter(r=>r.txCount>0).length, "#f472b6"],
+              ].map(([label, val, color])=>(
+                <div key={label} className="print-card" style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:10, padding:"16px 18px" }}>
+                  <div className="print-muted" style={{ fontSize:10, color:C.muted, letterSpacing:"0.08em", marginBottom:6 }}>{label.toUpperCase()}</div>
+                  <div style={{ fontSize:30, fontWeight:800, color }}>{val}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Top items */}
+            <div className="print-card" style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:22, marginBottom:16 }}>
+              <div className="print-accent" style={{ fontSize:13, fontWeight:700, color:C.accent, marginBottom:14, letterSpacing:"0.05em" }}>🏆 TOP 10 ITENS MÁS VENDIDOS</div>
+              {topItems.map(([item, qty], i) => {
+                const pct = Math.round((qty / totalUnitsAll) * 100);
+                return (
+                  <div key={item} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:9 }}>
+                    <div style={{ width:22, fontSize:11, color:C.dim, flexShrink:0 }}>#{i+1}</div>
+                    <div className="print-title" style={{ flex:1, fontSize:12, color:C.text }}>{item}</div>
+                    <div style={{ width:180, background:C.raised, borderRadius:4, height:8, overflow:"hidden" }}>
+                      <div style={{ width:`${pct}%`, background:`linear-gradient(90deg,${C.accent2},${C.accent})`, height:"100%", borderRadius:4 }} />
+                    </div>
+                    <div className="print-accent" style={{ width:60, textAlign:"right", fontSize:12, color:C.accent, fontWeight:700 }}>{qty} un.</div>
+                    <div className="print-muted" style={{ width:36, textAlign:"right", fontSize:10, color:C.dim }}>{pct}%</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Per restaurant breakdown */}
+            <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+              {summaryByRestaurant.map(({ name, itemTotals, totalUnits, txCount }) => (
+                <div key={name} className="print-card" style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:22 }}>
+                  {/* restaurant header */}
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14, borderBottom:`1px solid ${C.border}`, paddingBottom:12 }}>
+                    <div>
+                      <div className="print-accent" style={{ fontSize:15, fontWeight:800, color:C.accent }}>{name}</div>
+                      <div className="print-muted" style={{ fontSize:10, color:C.dim, marginTop:2 }}>{txCount} transações · {totalUnits} unidades</div>
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:26, fontWeight:800, color:"#34d399" }}>{totalUnits}</div>
+                      <div className="print-muted" style={{ fontSize:10, color:C.dim }}>unidades</div>
+                    </div>
+                  </div>
+
+                  {/* items table */}
+                  {Object.keys(itemTotals).length === 0 ? (
+                    <div className="print-muted" style={{ fontSize:12, color:C.dim, padding:"8px 0" }}>Sem vendas no período.</div>
+                  ) : (
+                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+                      <thead>
+                        <tr style={{ borderBottom:`1px solid ${C.border2}` }}>
+                          {["Item","Qtd","% do restaurante"].map(h=>(
+                            <th key={h} className="print-muted" style={{ textAlign:h==="Item"?"left":"right", padding:"4px 8px", fontSize:10, color:C.muted, fontWeight:600, letterSpacing:"0.05em" }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Object.entries(itemTotals).sort((a,b)=>b[1]-a[1]).map(([item, qty], ri)=>{
+                          const pct = totalUnits > 0 ? Math.round((qty/totalUnits)*100) : 0;
+                          return (
+                            <tr key={item} className={ri%2===1?"print-row-alt":""} style={{ background: ri%2===1 ? "#0a0f1e" : "transparent" }}>
+                              <td className="print-title" style={{ padding:"6px 8px", color:C.text }}>{item}</td>
+                              <td className="print-accent" style={{ padding:"6px 8px", textAlign:"right", color:C.accent, fontWeight:700 }}>{qty}</td>
+                              <td className="print-muted" style={{ padding:"6px 8px", textAlign:"right", color:C.dim }}>{pct}%</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Stock snapshot */}
+            <div className="print-card" style={{ background:C.surface, border:`1px solid ${C.border}`, borderRadius:12, padding:22, marginTop:16 }}>
+              <div className="print-accent" style={{ fontSize:13, fontWeight:700, color:C.accent, marginBottom:14, letterSpacing:"0.05em" }}>📦 EXISTENCIAS ACTUALES · GELADEIRA GENERAL</div>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                <thead>
+                  <tr style={{ borderBottom:`1px solid ${C.border2}` }}>
+                    {["Produto","Stock","Estado"].map(h=>(
+                      <th key={h} className="print-muted" style={{ textAlign:h==="Stock"||h==="Estado"?"right":"left", padding:"4px 8px", fontSize:10, color:C.muted, fontWeight:600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(stock).sort((a,b)=>a[1]-b[1]).map(([k,v],ri)=>(
+                    <tr key={k} className={ri%2===1?"print-row-alt":""} style={{ background: ri%2===1 ? "#0a0f1e" : "transparent" }}>
+                      <td className="print-title" style={{ padding:"5px 8px", color:C.text }}>{k}</td>
+                      <td className={v<=5?"print-low":"print-accent"} style={{ padding:"5px 8px", textAlign:"right", fontWeight:700, color:v<=5?C.red:v<=15?C.amber:C.accent }}>{v}</td>
+                      <td style={{ padding:"5px 8px", textAlign:"right" }}>
+                        <span className={v<=5?"print-low":v<=15?"":"print-ok"} style={{
+                          fontSize:10, padding:"2px 8px", borderRadius:4,
+                          background: v<=5?"#7f1d1d":v<=15?"#451a03":"#14532d",
+                          color: v<=5?"#fca5a5":v<=15?C.amber:"#86efac",
+                        }}>
+                          {v<=5?"⚠ BAJO":v<=15?"↓ MÉDIO":"✓ OK"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            </>)}
           </div>
         )}
 
